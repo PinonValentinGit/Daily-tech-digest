@@ -47,7 +47,7 @@ Use Slack Block Kit mrkdwn syntax strictly:
 - Bold: *text*
 - Italic: _text_
 - Links: <https://example.com|link text>
-- Bullets: start each bullet line with "• " (bullet + one space)
+- Bullets: start each bullet line with "• " (bullet, then one space, then text)
 - Section dividers: use a blank line between sections (no horizontal rules)
 - NO markdown headers (#), NO triple backticks, NO HTML tags
 - Keep each bullet to 1-2 lines. No multi-paragraph bullets.
@@ -103,7 +103,7 @@ def generate_digest() -> str:
 
     messages = [{"role": "user", "content": USER_PROMPT}]
     max_turns = 15  # Safety limit for tool-use loops
-    last_text = ""
+    all_text_blocks = []
 
     for turn in range(max_turns):
         response = client.messages.create(
@@ -114,13 +114,12 @@ def generate_digest() -> str:
             messages=messages,
         )
 
-        # Collect only text blocks from this response
+        # Collect ALL text blocks across all turns
         for block in response.content:
             if block.type == "text":
-                # Only keep substantial text (the digest), skip short narration
                 text = block.text.strip()
                 if text:
-                    last_text = text
+                    all_text_blocks.append(text)
 
         # If the model is done, break
         if response.stop_reason == "end_turn":
@@ -148,36 +147,35 @@ def generate_digest() -> str:
 
         print(f"  ↳ Search turn {turn + 1} completed")
 
-    if not last_text:
+    if not all_text_blocks:
         return "⚠️ Could not generate digest today."
 
-    # The last substantial text block is the final digest.
-    # Filter out any remaining preamble lines that aren't part of the digest.
-    lines = last_text.split("\n")
-    # Find where the actual digest starts (first emoji/section header)
-    digest_start = 0
+    # The digest is the longest text block (narration snippets are short)
+    digest = max(all_text_blocks, key=len)
+
+    # Strip any preamble before the first section header
+    lines = digest.split("\n")
     for i, line in enumerate(lines):
         if line.strip().startswith(":fire:") or line.strip().startswith("🔥"):
-            digest_start = i
-            break
+            return "\n".join(lines[i:]).strip()
 
-    return "\n".join(lines[digest_start:]).strip()
+    # If no section header found, return as-is
+    return digest.strip()
 
 
 def post_to_slack(message: str):
     """Post the digest to Slack via incoming webhook."""
     today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
     header = f"☀️ *Palissade Daily Digest* — {today}\n\n"
+    full_message = header + message
 
-    payload = {
-        "text": header + message,
-        "unfurl_links": False,
-        "unfurl_media": False,
-    }
+    # Slack webhook text limit is 40,000 chars. Truncate gracefully if needed.
+    if len(full_message) > 39000:
+        full_message = full_message[:39000] + "\n\n_...digest truncated due to length_"
 
     resp = requests.post(
         SLACK_WEBHOOK_URL,
-        json=payload,
+        json={"text": full_message, "unfurl_links": False, "unfurl_media": False},
         headers={"Content-Type": "application/json"},
         timeout=30,
     )
