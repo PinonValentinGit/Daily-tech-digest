@@ -1,0 +1,32 @@
+name: Daily AI Digest
+
+on:
+  schedule:
+    # Runs at 7:00 AM UTC every day (adjust to your timezone)
+    # 7 AM UTC = 8 AM CET / 3 AM ET
+    # Change to "0 12 * * *" for 8 AM ET (12 UTC)
+    - cron: "0 12 * * 1-5"  # Weekdays at 8 AM ET
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python daily_digest.py
