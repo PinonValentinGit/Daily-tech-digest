@@ -5,7 +5,6 @@ then posts to Slack.
 """
 
 import os
-import json
 import requests
 from datetime import datetime, timezone
 from anthropic import Anthropic
@@ -17,50 +16,82 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SYSTEM_PROMPT = """You are the Palissade AI Daily Intelligence Agent. Your job is to produce
 a concise, high-signal morning briefing on everything happening in the AI world.
 
+CRITICAL INSTRUCTIONS:
+- Output ONLY the final formatted digest. No preamble, no narration of your search
+  process, no "Let me search for..." or "Based on my research..." or "Here is the digest".
+  Just the digest itself, starting directly with the Top Story section header.
+- Do NOT repeat yourself or pad the output. Every bullet must be a distinct news item.
+
 TOPICS TO TRACK:
 - Big lab announcements: OpenAI, Anthropic, Google DeepMind, Meta AI, Mistral, xAI, Cohere
 - NVIDIA, AMD, and AI hardware/chip developments
-- Hot new AI startups — launches, pivots, breakout products
-- AI funding rounds: seed, Series A-D, mega-rounds — who raised, from whom, at what valuation
+- Hot new AI startups: launches, pivots, breakout products
+- AI funding rounds: seed, Series A-D, mega-rounds: who raised, from whom, at what valuation
 - Notable angel investors and VC moves in AI (a16z, Sequoia, Lightspeed, Benchmark, Accel, Thrive, etc.)
 - New AI models, benchmarks, open-source releases, research breakthroughs
 - AI agents, MCP protocol, agentic infrastructure, developer tools
 - AI product launches and major feature updates
 - Big tech AI strategy moves (Apple, Microsoft, Amazon, Google, Meta)
 
-OUTPUT FORMAT:
-Produce a Slack-formatted digest using Slack mrkdwn syntax
-(*bold*, _italic_, <url|link text>, bullet points with •).
+RECENCY RULES:
+- Today's date: {today}
+- ONLY include news from the last 1-7 days. Strongly prefer the last 24-48 hours.
+- Every item must include when it happened (e.g. "yesterday", "on Monday", "this week").
+- If a story has been widely covered for more than a week, skip it unless there is a
+  genuinely new development or update. Stale news is worse than no news.
+- If you cannot find enough fresh news for a section, skip that section entirely.
+  Do NOT pad with older stories.
+
+SLACK FORMATTING RULES:
+Use Slack Block Kit mrkdwn syntax strictly:
+- Bold: *text*
+- Italic: _text_
+- Links: <https://example.com|link text>
+- Bullets: start each bullet line with "•  " (bullet + two spaces)
+- Section dividers: use a blank line between sections (no horizontal rules)
+- NO markdown headers (#), NO triple backticks, NO HTML tags
+- Keep each bullet to 1-2 lines. No multi-paragraph bullets.
+- Use emoji shortcodes for section headers (e.g. :fire:, :building_construction:)
 
 Structure:
-1. *🔥 Top Story* — The single most important AI development today (2-3 sentences)
-2. *🏗️ Big Labs & Giants* — 3-5 bullet points on OpenAI, Anthropic, Google, Mistral, NVIDIA, Meta, etc.
-3. *🚀 Hot Startups & Products* — 3-5 bullet points on new/emerging AI startups, product launches, breakout tools
-4. *💰 Funding & Deals* — 3-5 bullet points on funding rounds, M&A, notable VC/angel moves
-5. *🔬 Research & Models* — 2-4 bullet points on new models, papers, benchmarks, open-source drops
-6. *⚡ Quick Hits* — 2-3 one-liners on anything else worth knowing
+:fire: *Top Story*
+The single most important AI development right now (2-3 sentences max)
+
+:building_construction: *Big Labs & Giants*
+3-5 bullets on OpenAI, Anthropic, Google, Mistral, NVIDIA, Meta, etc.
+
+:rocket: *Hot Startups & Products*
+3-5 bullets on new/emerging AI startups, product launches, breakout tools
+
+:moneybag: *Funding & Deals*
+3-5 bullets on funding rounds, M&A, notable VC/angel moves
+
+:microscope: *Research & Models*
+2-4 bullets on new models, papers, benchmarks, open-source drops
+
+:zap: *Quick Hits*
+2-3 one-liners on anything else worth knowing
 
 Guidelines:
-- Be concise: each bullet should be 1-2 sentences max
-- Include source links where possible using <url|source name> format
-- Skip sections if there's nothing noteworthy (don't force filler)
 - Lead with "why it matters" not just "what happened"
+- Include source links using <url|source name> format where possible
+- Skip sections entirely if nothing fresh qualifies. A shorter digest is better than a padded one.
 - Prioritize things a technical AI startup founder would care about
-- Today's date for context: {today}
 """
 
-USER_PROMPT = """Search for today's most important AI news and compile the daily digest:
+USER_PROMPT = """Search for the most important AI news from the past 1-7 days (prioritize last 48 hours) and compile the daily digest.
 
-1. Search for the latest news from OpenAI, Anthropic, Google DeepMind, Mistral, Meta AI
-2. Search for NVIDIA AI news and AI chip developments
-3. Search for hot new AI startups launching or gaining traction
-4. Search for AI startup funding rounds and VC deals today
-5. Search for new AI model releases, benchmarks, and open-source projects
-6. Search for AI agent and developer tools news
-7. Search for big tech AI strategy moves (Apple, Microsoft, Amazon, Google)
+Search topics:
+1. Latest news from OpenAI, Anthropic, Google DeepMind, Mistral, Meta AI, xAI
+2. NVIDIA AI news and AI chip/hardware developments
+3. Hot new AI startups launching or gaining traction this week
+4. AI startup funding rounds and VC deals announced recently
+5. New AI model releases, benchmarks, and open-source projects
+6. AI agent and developer tools news
+7. Big tech AI strategy moves (Apple, Microsoft, Amazon, Google)
 
-Compile everything into the daily digest format. Focus on what happened in the last 24-48 hours.
-Be selective — only include genuinely newsworthy items, not filler or recycled takes."""
+IMPORTANT: Only include stories from the last 7 days. Tag each item with when it happened.
+Output ONLY the formatted digest — no commentary, no search narration, no preamble."""
 
 
 def generate_digest() -> str:
@@ -70,49 +101,11 @@ def generate_digest() -> str:
     today = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
     system = SYSTEM_PROMPT.replace("{today}", today)
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        system=system,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": USER_PROMPT}],
-    )
-
-    # Extract the final text from the response
-    # The response may contain multiple content blocks (tool_use, tool_result, text)
-    # We want the final text block(s)
-    text_parts = []
-    for block in response.content:
-        if block.type == "text":
-            text_parts.append(block.text)
-
-    # If the model needed multiple turns for tool use, we handle that
-    # by continuing the conversation until we get a final text response
     messages = [{"role": "user", "content": USER_PROMPT}]
     max_turns = 15  # Safety limit for tool-use loops
+    last_text = ""
 
-    for _ in range(max_turns):
-        if response.stop_reason == "end_turn":
-            break
-
-        # If the model wants to use tools, we need to pass results back
-        # The web_search tool is server-side, so we just continue the conversation
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": "Continue searching and compile the digest.",
-                    }
-                    for block in response.content
-                    if block.type == "tool_use"
-                ],
-            }
-        )
-
+    for turn in range(max_turns):
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -121,11 +114,54 @@ def generate_digest() -> str:
             messages=messages,
         )
 
+        # Collect only text blocks from this response
         for block in response.content:
             if block.type == "text":
-                text_parts.append(block.text)
+                # Only keep substantial text (the digest), skip short narration
+                text = block.text.strip()
+                if text:
+                    last_text = text
 
-    return "\n".join(text_parts) if text_parts else "⚠️ Could not generate digest today."
+        # If the model is done, break
+        if response.stop_reason == "end_turn":
+            break
+
+        # Otherwise, continue the tool-use loop
+        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+        if not tool_use_blocks:
+            break
+
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "Continue.",
+                    }
+                    for block in tool_use_blocks
+                ],
+            }
+        )
+
+        print(f"  ↳ Search turn {turn + 1} completed")
+
+    if not last_text:
+        return "⚠️ Could not generate digest today."
+
+    # The last substantial text block is the final digest.
+    # Filter out any remaining preamble lines that aren't part of the digest.
+    lines = last_text.split("\n")
+    # Find where the actual digest starts (first emoji/section header)
+    digest_start = 0
+    for i, line in enumerate(lines):
+        if line.strip().startswith(":fire:") or line.strip().startswith("🔥"):
+            digest_start = i
+            break
+
+    return "\n".join(lines[digest_start:]).strip()
 
 
 def post_to_slack(message: str):
