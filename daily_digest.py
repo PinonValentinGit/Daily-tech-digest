@@ -47,7 +47,7 @@ Use Slack Block Kit mrkdwn syntax strictly:
 - Bold: *text*
 - Italic: _text_
 - Links: <https://example.com|link text>
-- Bullets: start each bullet line with "•  " (bullet + two spaces)
+- Bullets: start each bullet line with "• " (bullet + one space)
 - Section dividers: use a blank line between sections (no horizontal rules)
 - NO markdown headers (#), NO triple backticks, NO HTML tags
 - Keep each bullet to 1-2 lines. No multi-paragraph bullets.
